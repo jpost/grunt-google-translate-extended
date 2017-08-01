@@ -1,8 +1,8 @@
-# grunt-google-translate
+# grunt-google-translate-extended
 
 > A build task to translate JSON files to other languages using Google's Translation API. Pairs very well with angular-translate.
 
-Massive thanks to [MartyIce](https://github.com/MartyIce) for allowing me to use the grunt-google-translate namespace.
+> Extended from https://github.com/dolanmiu/grunt-google-translate 
 
 ## Getting Started
 This plugin requires Grunt `~0.4.5`
