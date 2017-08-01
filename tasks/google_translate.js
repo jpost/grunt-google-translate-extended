@@ -66,25 +66,80 @@ module.exports = function (grunt) {
 
 
         this.files.forEach(function (file) {
+            //Extract the file name (without extension) from from file source.
+            //This will be everything after the last slash, and before the file's extension
+            var fileName = /([^\/]+)(?=\.\w+$)/.exec(file.src)[0];
             file.prefix = file.prefix || '';
             file.suffix = file.suffix || /.+(\..+)/.exec(file.src)[1];
 
-            var languageJson = JSON.parse(grunt.file.read(file.src)),
-                variableSafeJson = angular.createVariableSafeJson(languageJson);
+            //Read in the json from the latest source file
+            var currentLanguageSourceJson = JSON.parse(grunt.file.read(file.src));
+            var currentVariableSafeJson = angular.createVariableSafeJson(currentLanguageSourceJson);
+            
+            //Read in the json from the last execution of the translate command (if found).
+            //This will be used to see if any values have changed, in which case we will re-translate them
+            var previousPath = file.srcPrev;
+            var previousVariableSafeJson = null;
+            if (grunt.file.exists(previousPath)) {
+                var previousLanguageSourceJson = JSON.parse(grunt.file.read(previousPath));
+                previousVariableSafeJson = angular.createVariableSafeJson(previousLanguageSourceJson);
+            }
+
+            //Write backup for this source language file, so the next time we run we can compare 
+            //to see if any source language values have changed and need to be re-translated
+            grunt.log.writeln('Writing backup for ' + fileName);
+            grunt.file.write(file.srcPrev, JSON.stringify(currentLanguageSourceJson, null, "\t"));
 
             file.targetLanguages.forEach(function (targetLanguage) {
-                var filePath = file.dest + file.prefix + targetLanguage + file.suffix;
-                promises.push(translate(variableSafeJson, googleTranslate, file.sourceLanguage, targetLanguage, filePath, grunt));
+                //Construct the export path for this language
+                var destinationPath = file.dest + targetLanguage + "/" + file.prefix + fileName + file.suffix;
+                              
+                //Read in the current JSON object for the target language, that is the keys and values that have already been translated for this language
+                //If the translated file does not yet exist, default to an empty object for the already-translated json
+                var thisLanguageAlreadyTranslatedJson = {};
+                if (grunt.file.exists(destinationPath)) {
+                    var thisLanguageAlreadyTranslatedJson = JSON.parse(grunt.file.read(destinationPath));
+                }
+
+                //Determine which keys from the source language need to be translated
+                //These will those keys in the source file that
+                //1. do not already exist in the target language's json (probably the first translation of this file, or a key/value added since the last run)
+                //2. have had their value in the source language changed since the previous run, meaning we need to update the translation to this language as well
+                var needTranslation = {};
+                for (var key in currentVariableSafeJson) {
+                    if (typeof thisLanguageAlreadyTranslatedJson[key] == 'undefined') {
+                        console.log("did not find key already translated; adding to list");
+                        needTranslation[key] = currentVariableSafeJson[key];                      
+                    } else if (previousVariableSafeJson != null && typeof previousVariableSafeJson[key] != 'undefined' && currentLanguageSourceJson[key] !== previousVariableSafeJson[key]) {
+                        console.log("value for key in source language has changed, adding to list to re-translate");
+                        needTranslation[key] = currentVariableSafeJson[key];
+                    }
+                }
+                
+                if (Object.keys(needTranslation).length > 0) {
+                    //Have google translate only those keys from the source language that we have not yet translated to the target language
+                    promises.push(translate(needTranslation, googleTranslate, file.sourceLanguage, targetLanguage, destinationPath, grunt));
+                }
             });
         });
 
         Q.all(promises).then(function (translatedJsons) {
-            grunt.log.writeln('Writing translated file');
             translatedJsons.forEach(function (translatedJson) {
                 var revertedJson = angular.revertVariablesInJson(translatedJson.json);
 
-                grunt.file.write(translatedJson.dest, JSON.stringify(revertedJson, null, "\t"));
-                grunt.log.writeln('Wrote translated file: ' + translatedJson.dest);
+                //If the translation file already exists for this language, read in the JSON 
+                //so we can append the new translations to the existing translations
+                var existingJson = {};
+                if (grunt.file.exists(translatedJson.dest)) {
+                    existingJson = JSON.parse(grunt.file.read(translatedJson.dest));
+                }
+                
+                //Add the newly translated values to the already existing json for this language
+                for (var key in revertedJson) {
+                    existingJson[key] = revertedJson[key];
+                }
+                grunt.log.writeln('Writing ' + Object.keys(revertedJson).length + ' new translations to ' + translatedJson.dest);
+                grunt.file.write(translatedJson.dest, JSON.stringify(existingJson, null, "\t"));
             });
             done();
         }, function (err) {
